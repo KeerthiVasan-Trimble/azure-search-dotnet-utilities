@@ -101,9 +101,29 @@ namespace AzureSearchBackupRestore
 
             File.WriteAllText(BackupDirectory + "\\" + SourceIndexName + ".schema", GetIndexSchema());
 
-            // Extract the content to JSON files 
-            int SourceDocCount = GetCurrentDocCount(SourceSearchClient);
-            WriteIndexDocuments(SourceDocCount);     // Output content from index to json files
+            string facetField = "category";
+            List<string> facetValues = GetFacetValues(facetField);
+            Console.WriteLine("\n  Total logical indexes: " + facetValues.Count);
+            var jsonContent = string.Empty;
+            foreach (var indexName in facetValues)
+            {
+                Console.WriteLine(indexName);
+            }
+            jsonContent += JsonSerializer.Serialize(facetValues);
+            File.WriteAllText("C:\\Users\\kishorv\\Desktop\\Json\\Indexes.json", jsonContent);
+            string indexFileCount = string.Empty;
+            foreach (var facetValue in facetValues)
+            {
+                Console.WriteLine($"\n  Retrieving documents for logical-index: '{facetValue}'\r\n");
+                int indexDocCount = GetDocCountForFacetAsync(SourceSearchClient, facetField, facetValue);
+                if (indexDocCount > 100000)
+                {
+                    Console.WriteLine($"Files count: {indexDocCount} for index: {facetValue}");
+                }
+                indexFileCount = $"{facetValue}: {indexDocCount}\n";
+                File.AppendAllText("C:\\Users\\kishorv\\Desktop\\Json\\Counter.json", indexFileCount);
+                WriteIndexDocuments(indexDocCount, facetField, facetValue);
+            }
         }
 
         static void WriteIndexDocuments(int CurrentDocCount)
@@ -124,7 +144,7 @@ namespace AzureSearchBackupRestore
                         Console.WriteLine("  Backing up source documents to {0} - (batch size = {1})", BackupDirectory + "\\" + SourceIndexName + fileCounter + ".json", MaxBatchSize);
 
                         tasks.Add(Task.Factory.StartNew(() =>
-                            ExportToJSON((fileCounter - 1) * MaxBatchSize, IDFieldName, BackupDirectory + "\\" + SourceIndexName + fileCounter + ".json")
+                            ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, BackupDirectory + "\\" + SourceIndexName + fileCounter + ".json")
                         ));
                     }
 
@@ -135,12 +155,13 @@ namespace AzureSearchBackupRestore
             return;
         }
 
-        static void ExportToJSON(int Skip, string IDFieldName, string FileName)
+        static void ExportToJSON(int skip, string facetField, string facetValue, string FileName)
         {
             // Extract all the documents from the selected index to JSON files in batches of 500 docs / file
             string json = string.Empty;
             try
             {
+                string filterQuery = $"{facetField} eq '{facetValue}'";
                 SearchOptions options = new SearchOptions()
                 {
                     SearchMode = SearchMode.All,
@@ -171,6 +192,28 @@ namespace AzureSearchBackupRestore
             {
                 Console.WriteLine("Error: {0}", ex.Message.ToString());
             }
+        }
+
+        private static List<string> GetFacetValues(string facetField)
+        {
+            List<string> facetValues = new List<string>();
+            SearchOptions options = new SearchOptions
+            {
+                SearchMode = SearchMode.All,
+                Facets = {$"{facetField}, count:10000"},
+                Select = {facetField}
+            };
+
+            SearchResults<Dictionary<string, object>> results = SourceSearchClient.Search<Dictionary<string, object>>("*", options);
+
+            foreach (FacetResult facetResult in results.Facets[facetField])
+            {
+                facetValues.Add(facetResult.Value.ToString());
+            }
+
+            var returnValue = facetValues.Distinct().ToList<string>();
+            returnValue.Sort();
+            return returnValue;
         }
 
         static string GetIDFieldName()
