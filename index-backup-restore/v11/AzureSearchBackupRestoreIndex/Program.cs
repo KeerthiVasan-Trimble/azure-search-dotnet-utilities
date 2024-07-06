@@ -113,17 +113,19 @@ namespace AzureSearchBackupRestore
             List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
             Console.WriteLine($"\n List of {FacetCategory}: {DistinctFacetContent.Count}");
 
-            string IndexFile = StatisticsDirectory + "\\" + FacetCategory +".txt";
-            File.Create(IndexFile);
+            string IndexFile = StatisticsDirectory + "\\" + FacetCategory +"1.txt";
+            StreamWriter indexfile = File.CreateText(IndexFile);
 
             foreach (var _FacetContent in DistinctFacetContent)
             {
                 Console.WriteLine(_FacetContent);
-                File.AppendAllText(IndexFile, _FacetContent);
+                indexfile.WriteLine(IndexFile, _FacetContent);
             }
 
+            indexfile.Close();
+
             string CounterFile = StatisticsDirectory + "\\Counter.txt";
-            File.Create(CounterFile);
+            StreamWriter counterfile = File.CreateText(CounterFile);
 
             int id = 0;
 
@@ -138,12 +140,14 @@ namespace AzureSearchBackupRestore
                     Console.WriteLine($"Files count: {indexDocCount} for index: {_FacetContent}");
                 
                 string content = $"{_FacetContent}: {indexDocCount}\n";
-                File.AppendAllText(CounterFile, content);
+                counterfile.WriteLine(CounterFile, content);
 
                 WriteIndexDocuments(indexDocCount, FacetCategory, _FacetContent);
 
                 ++id;
             }
+
+            counterfile.Close();
         }
 
         private static int GetDocCountForFacetAsync(SearchClient searchClient, string facetField, string facetValue)
@@ -244,7 +248,7 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = {$"{facetField}, count:300"},
+                Facets = {$"{facetField}"},
                 Select = {facetField}
             };
 
