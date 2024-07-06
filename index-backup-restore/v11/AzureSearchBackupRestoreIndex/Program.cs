@@ -27,6 +27,8 @@ namespace AzureSearchBackupRestore
         private static string TargetAdminKey;
         private static string TargetIndexName;
         private static string BackupDirectory;
+        private static string StatisticsDirectory;
+        private static string FacetCategory;
 
         private static SearchIndexClient SourceIndexClient;
         private static SearchClient SourceSearchClient;
@@ -35,34 +37,37 @@ namespace AzureSearchBackupRestore
 
         private static int MaxBatchSize = 500;          // JSON files will contain this many documents / file and can be up to 1000
         private static int ParallelizedJobs = 10;       // Output content in parallel jobs
+        private static int MaxRecordsSkippablePerRequest = 100000;  // Fixed by Azure. Do not change
 
         static void Main(string[] args)
         {
 
-            //Get source and target search service info and index names from appsettings.json file
-            //Set up source and target search service clients
+            // 1. Get source and target index detailes and other configurations from appsettings.json file
             ConfigurationSetup();
 
-            //Backup the source index
+            // 2. Backup from source index
             Console.WriteLine("\nSTART INDEX BACKUP");
-            BackupIndexAndDocuments();
+            BackupIndexAndDocuments(FacetCategory);
 
-            //Recreate and import content to target index
+            // 3. Recreate and import content to target index
             Console.WriteLine("\nSTART INDEX RESTORE");
             DeleteIndex();
             CreateTargetIndex();
-            ImportFromJSON();
-            Console.WriteLine("\r\n  Waiting 10 seconds for target to index content...");
-            Console.WriteLine("  NOTE: For really large indexes it may take longer to index all content.\r\n");
-            Thread.Sleep(10000);
 
-            // Validate all content is in target index
+            // 4. Backup to target index
+            ImportFromJSON();
+
+            // 5. Validate the contents is in target index
             int sourceCount = GetCurrentDocCount(SourceSearchClient);
             int targetCount = GetCurrentDocCount(TargetSearchClient);
+
+            Console.WriteLine("\r\n  Waiting 250 seconds for target to index content...");
+            Console.WriteLine("  NOTE: For really large indexes it may take longer to index all content.\r\n");
+            Thread.Sleep(1000 * 250);
+
             Console.WriteLine("\nSAFEGUARD CHECK: Source and target index counts should match");
             Console.WriteLine(" Source index contains {0} docs", sourceCount);
             Console.WriteLine(" Target index contains {0} docs\r\n", targetCount);
-
             Console.WriteLine("Press any key to continue...");
             Console.ReadLine();
         }
@@ -76,53 +81,68 @@ namespace AzureSearchBackupRestore
             SourceSearchServiceName = configuration["SourceSearchServiceName"];
             SourceAdminKey = configuration["SourceAdminKey"];
             SourceIndexName = configuration["SourceIndexName"];
+
             TargetSearchServiceName = configuration["TargetSearchServiceName"];
             TargetAdminKey = configuration["TargetAdminKey"];
             TargetIndexName = configuration["TargetIndexName"];
+
+            FacetCategory = configuration["FacetCategory"];
             BackupDirectory = configuration["BackupDirectory"];
+            StatisticsDirectory = configuration["StatisticsDirectory"];
+
+            SourceIndexClient = new SearchIndexClient(new Uri("https://" + SourceSearchServiceName + ".search.windows.net"), new AzureKeyCredential(SourceAdminKey));
+            SourceSearchClient = SourceIndexClient.GetSearchClient(SourceIndexName);
+
+            TargetIndexClient = new SearchIndexClient(new Uri($"https://" + TargetSearchServiceName + ".search.windows.net"), new AzureKeyCredential(TargetAdminKey));
+            TargetSearchClient = TargetIndexClient.GetSearchClient(TargetIndexName);
 
             Console.WriteLine("CONFIGURATION:");
             Console.WriteLine("\n  Source service and index {0}, {1}", SourceSearchServiceName, SourceIndexName);
             Console.WriteLine("\n  Target service and index: {0}, {1}", TargetSearchServiceName, TargetIndexName);
             Console.WriteLine("\n  Backup directory: " + BackupDirectory);
-
-            SourceIndexClient = new SearchIndexClient(new Uri("https://" + SourceSearchServiceName + ".search.windows.net"), new AzureKeyCredential(SourceAdminKey));
-            SourceSearchClient = SourceIndexClient.GetSearchClient(SourceIndexName);
-
-
-            TargetIndexClient = new SearchIndexClient(new Uri($"https://" + TargetSearchServiceName + ".search.windows.net"), new AzureKeyCredential(TargetAdminKey));
-            TargetSearchClient = TargetIndexClient.GetSearchClient(TargetIndexName);
+            Console.WriteLine("\n  Statistics directory: " + StatisticsDirectory);
         }
 
-        static void BackupIndexAndDocuments()
+        static void BackupIndexAndDocuments(string FacetCategory)
         {
-            // Backup the index schema to the specified backup directory
-            Console.WriteLine("\n  Backing up source index schema to {0}\r\n", BackupDirectory + "\\" + SourceIndexName + ".schema");
-
+            // 1. Backup the index schema to the specified backup directory
+            Console.WriteLine("\n Backing up source index schema to {0}\r\n", BackupDirectory + "\\" + SourceIndexName + ".schema");
             File.WriteAllText(BackupDirectory + "\\" + SourceIndexName + ".schema", GetIndexSchema());
 
-            string facetField = "category";
-            List<string> facetValues = GetFacetValues(facetField);
-            Console.WriteLine("\n  Total logical indexes: " + facetValues.Count);
-            var jsonContent = string.Empty;
-            foreach (var indexName in facetValues)
+            // 2. Get the distinct list of facets values
+            List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
+            Console.WriteLine($"\n List of {FacetCategory}: {DistinctFacetContent.Count}");
+
+            string IndexFile = StatisticsDirectory + "\\" + FacetCategory +".txt";
+            File.Create(IndexFile);
+
+            foreach (var _FacetContent in DistinctFacetContent)
             {
-                Console.WriteLine(indexName);
+                Console.WriteLine(_FacetContent);
+                File.AppendAllText(IndexFile, _FacetContent);
             }
-            jsonContent += JsonSerializer.Serialize(facetValues);
-            File.WriteAllText("C:\\Users\\kishorv\\Desktop\\Json\\Indexes.json", jsonContent);
-            string indexFileCount = string.Empty;
-            foreach (var facetValue in facetValues)
+
+            string CounterFile = StatisticsDirectory + "\\Counter.txt";
+            File.Create(CounterFile);
+
+            int id = 0;
+
+            foreach (var _FacetContent in DistinctFacetContent)
             {
-                Console.WriteLine($"\n  Retrieving documents for logical-index: '{facetValue}'\r\n");
-                int indexDocCount = GetDocCountForFacetAsync(SourceSearchClient, facetField, facetValue);
-                if (indexDocCount > 100000)
-                {
-                    Console.WriteLine($"Files count: {indexDocCount} for index: {facetValue}");
-                }
-                indexFileCount = $"{facetValue}: {indexDocCount}\n";
-                File.AppendAllText("C:\\Users\\kishorv\\Desktop\\Json\\Counter.json", indexFileCount);
-                WriteIndexDocuments(indexDocCount, facetField, facetValue);
+                Console.WriteLine($"Iteration {id}");
+                Console.WriteLine($"\n  Retrieving documents for {FacetCategory} : {_FacetContent}\r\n");
+
+                int indexDocCount = GetDocCountForFacetAsync(SourceSearchClient, FacetCategory, _FacetContent);
+
+                if (indexDocCount > MaxRecordsSkippablePerRequest)
+                    Console.WriteLine($"Files count: {indexDocCount} for index: {_FacetContent}");
+                
+                string content = $"{_FacetContent}: {indexDocCount}\n";
+                File.AppendAllText(CounterFile, content);
+
+                WriteIndexDocuments(indexDocCount, FacetCategory, _FacetContent);
+
+                ++id;
             }
         }
 
@@ -224,20 +244,19 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = {$"{facetField}, count:10000"},
+                Facets = {$"{facetField}, count:300"},
                 Select = {facetField}
             };
 
             SearchResults<Dictionary<string, object>> results = SourceSearchClient.Search<Dictionary<string, object>>("*", options);
 
             foreach (FacetResult facetResult in results.Facets[facetField])
-            {
                 facetValues.Add(facetResult.Value.ToString());
-            }
 
-            var returnValue = facetValues.Distinct().ToList<string>();
-            returnValue.Sort();
-            return returnValue;
+            facetValues = facetValues.Distinct().ToList<string>();
+            facetValues.Sort();
+
+            return facetValues;
         }
 
         static string GetIDFieldName()
