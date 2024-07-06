@@ -165,10 +165,10 @@ namespace AzureSearchBackupRestore
                     int fileCounter = FileCounter;
                     if ((fileCounter - 1) * MaxBatchSize < CurrentDocCount)
                     {
-                        Console.WriteLine("  Backing up source documents to {0} - (batch size = {1})", BackupDirectory + "\\" + SourceIndexName + fileCounter + ".json", MaxBatchSize);
+                        Console.WriteLine("  Backing up source documents to {0} - (batch size = {1})", BackupDirectory + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json", MaxBatchSize);
 
                         tasks.Add(Task.Factory.StartNew(() =>
-                            ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, BackupDirectory + "\\" + SourceIndexName + fileCounter + ".json")
+                            ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, BackupDirectory + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json")
                         ));
                     }
 
