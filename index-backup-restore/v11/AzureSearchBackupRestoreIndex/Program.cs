@@ -126,7 +126,31 @@ namespace AzureSearchBackupRestore
             }
         }
 
-        static void WriteIndexDocuments(int CurrentDocCount)
+        private static int GetDocCountForFacetAsync(SearchClient searchClient, string facetField, string facetValue)
+        {
+            try
+            {
+                string filterQuery = $"{facetField} eq '{facetValue}'";
+
+                SearchOptions options = new SearchOptions
+                {
+                    Filter = filterQuery,
+                    Size = 0, // We only need the count, not the actual documents
+                    IncludeTotalCount = true
+                };
+
+                SearchResults<Dictionary<string, object>> response = searchClient.Search<Dictionary<string, object>>("*", options);
+                return Convert.ToInt32(response.TotalCount);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  Error: {0}", ex.Message.ToString());
+            }
+
+            return -1;
+        }
+
+        static void WriteIndexDocuments(int CurrentDocCount, string facetField, string facetValue)
         {
             // Write document files in batches (per MaxBatchSize) in parallel
             string IDFieldName = GetIDFieldName();
@@ -166,7 +190,7 @@ namespace AzureSearchBackupRestore
                 {
                     SearchMode = SearchMode.All,
                     Size = MaxBatchSize,
-                    Skip = Skip
+                    Filter = filterQuery
                 };
 
                 SearchResults<SearchDocument> response = SourceSearchClient.Search<SearchDocument>("*", options);
