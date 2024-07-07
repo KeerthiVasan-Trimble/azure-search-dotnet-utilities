@@ -394,6 +394,8 @@ namespace AzureSearchBackupRestore
 
             try
             {
+                int _counter = 0;
+
                 foreach (string fileName in Directory.GetFiles(BackupDirectory, SourceIndexName + "*.json"))
                 {
                     Console.WriteLine("  -Uploading documents from file {0}", fileName);
@@ -401,6 +403,16 @@ namespace AzureSearchBackupRestore
                     Uri uri = new Uri(ServiceUri, "/indexes/" + TargetIndexName + "/docs/index");
                     HttpResponseMessage response = AzureSearchHelper.SendSearchRequest(HttpClient, HttpMethod.Post, uri, json);
                     response.EnsureSuccessStatusCode();
+                    
+                    Thread.Sleep(10 * 1000);
+
+                    if (_counter == 100)
+                    {
+                        Thread.Sleep(300 * 1000);
+                        _counter = 0;
+                    }
+
+                    _counter++;
                 }
             }
             catch (Exception ex)
