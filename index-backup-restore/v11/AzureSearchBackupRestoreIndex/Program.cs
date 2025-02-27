@@ -36,9 +36,9 @@ namespace AzureSearchBackupRestore
         private static SearchIndexClient TargetIndexClient;
         private static SearchClient TargetSearchClient;
 
-        private static int MaxBatchSize = 100;                       // JSON files will contain this many documents / file and can be up to 1000
-        private static int ParallelizedJobs = 1;                     // Output content in parallel jobs
-        private static int MaxRecordsSkippablePerRequest = 100000;   // Fixed by Azure. Do not change
+        private static int MaxBatchSize = 500;                        // JSON files will contain this many documents / file and can be up to 1000
+        private static int ParallelizedJobs = 10;                     // Output content in parallel jobs
+        private static int MaxRecordsSkippablePerRequest = 100000;    // Fixed by Azure. Do not change
 
         static void Main(string[] args)
         {
@@ -51,26 +51,35 @@ namespace AzureSearchBackupRestore
             if (!exists)
                 Directory.CreateDirectory(BackupDirectory);
 
+
             exists = Directory.Exists(MetadataDirectory);
 
             if (!exists)
                 Directory.CreateDirectory(MetadataDirectory);
 
-            IEnumerable<string> FinishedFacetContent = new List<string>();
+            exists = File.Exists(MetadataDirectory + "\\" + "Finished.txt");
+
+
+            if (!exists)
+                File.Create(MetadataDirectory + "\\" + "Finished.txt");        
+
+            List<string> FinishedFacetContent = new List<string>();
 
             if (File.Exists(MetadataDirectory + "\\" + "Finished.txt"))
             {
                 using (var lines = File.ReadLines(MetadataDirectory + "\\" + "Finished.txt").GetEnumerator())
                 {
-                    while (lines.MoveNext())
+                    do
                     {
                         var line = lines.Current;
-                        FinishedFacetContent.Append(line);
+                        if (line != null)
+                            FinishedFacetContent.Insert(0, line);
                     }
+                    while (lines.MoveNext());
                 }
             }
 
-            var FinishedWriter = File.CreateText(MetadataDirectory + "\\" + "Finished.txt");
+            FinishedFacetContent.Reverse();
 
             // 2. Delete and create the Target index
             if (RecreateTargetIndex)
@@ -83,7 +92,7 @@ namespace AzureSearchBackupRestore
             // 3. Get the distinct list of facets values from the Source index, skip finished indexes
             List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
             Console.WriteLine($"\n Count of {FacetCategory}: {DistinctFacetContent.Count}");
-            Console.WriteLine($"\n List of {FacetCategory}: \n  {string.Join("\n ", DistinctFacetContent.ToList())}");
+            Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", DistinctFacetContent.ToList())}");
 
             DistinctFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
 
@@ -107,9 +116,12 @@ namespace AzureSearchBackupRestore
                     Console.WriteLine(" Source index contains {0} docs", sourceCount);
                     Console.WriteLine(" Target index contains {0} docs", targetCount);
 
-                    if (sourceCount != targetCount)
+                    if (sourceCount == targetCount)
                     {
-                        FinishedWriter.WriteLine(_FacetContent);
+                        var Completed = new List<string>();
+                        Completed.Insert(0, _FacetContent);
+
+                        File.AppendAllLines(MetadataDirectory + "\\" + "Finished.txt", Completed);
                     }
 
                 }
@@ -119,10 +131,6 @@ namespace AzureSearchBackupRestore
             {
                 Console.WriteLine(e);
                 Console.WriteLine("Error in execution");
-            }
-            finally
-            {
-                FinishedWriter.Close();
             }
 
             Console.WriteLine("Press any key to continue...");
@@ -234,7 +242,7 @@ namespace AzureSearchBackupRestore
                     int fileCounter = FileCounter;
                     if ((fileCounter - 1) * MaxBatchSize < CurrentDocCount)
                     {
-                        Console.WriteLine("  Backing up source documents to {0} - (batch size = {1})", backupFolder + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json", MaxBatchSize);
+                        Console.WriteLine("  Backing up source documents to {0} - (batch max. size = {1})", backupFolder + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json", MaxBatchSize);
 
                         tasks.Add(Task.Factory.StartNew(() =>
                             ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, backupFolder + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json")
