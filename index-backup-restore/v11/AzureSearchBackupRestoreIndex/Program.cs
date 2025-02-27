@@ -26,8 +26,9 @@ namespace AzureSearchBackupRestore
         private static string TargetSearchServiceName;
         private static string TargetAdminKey;
         private static string TargetIndexName;
+        private static bool RecreateTargetIndex;
         private static string BackupDirectory;
-        private static string StatisticsDirectory;
+        private static string MetadataDirectory;
         private static string FacetCategory;
 
         private static SearchIndexClient SourceIndexClient;
@@ -35,39 +36,103 @@ namespace AzureSearchBackupRestore
         private static SearchIndexClient TargetIndexClient;
         private static SearchClient TargetSearchClient;
 
-        private static int MaxBatchSize = 500;          // JSON files will contain this many documents / file and can be up to 1000
-        private static int ParallelizedJobs = 10;       // Output content in parallel jobs
-        private static int MaxRecordsSkippablePerRequest = 100000;  // Fixed by Azure. Do not change
+        private static int MaxBatchSize = 500;                        // JSON files will contain this many documents / file and can be up to 1000
+        private static int ParallelizedJobs = 10;                     // Output content in parallel jobs
+        private static int MaxRecordsSkippablePerRequest = 100000;    // Fixed by Azure. Do not change
 
         static void Main(string[] args)
         {
 
-            // 1. Get source and target index detailes and other configurations from appsettings.json file
+            // 1. Get source, target index details and other configurations from appsettings.json file
             ConfigurationSetup();
 
-            // 2. Backup from source index
-            Console.WriteLine("\nSTART INDEX BACKUP");
-            BackupIndexAndDocuments(FacetCategory);
+            bool exists = Directory.Exists(BackupDirectory);
 
-            // 3. Recreate and import content to target index
-            Console.WriteLine("\nSTART INDEX RESTORE");
-            DeleteIndex();
-            CreateTargetIndex();
+            if (!exists)
+                Directory.CreateDirectory(BackupDirectory);
 
-            // 4. Backup to target index
-            ImportFromJSON();
 
-            // 5. Validate the contents is in target index
-            int sourceCount = GetCurrentDocCount(SourceSearchClient);
-            int targetCount = GetCurrentDocCount(TargetSearchClient);
+            exists = Directory.Exists(MetadataDirectory);
 
-            Console.WriteLine("\r\n  Waiting 250 seconds for target to index content...");
-            Console.WriteLine("  NOTE: For really large indexes it may take longer to index all content.\r\n");
-            Thread.Sleep(1000 * 250);
+            if (!exists)
+                Directory.CreateDirectory(MetadataDirectory);
 
-            Console.WriteLine("\nSAFEGUARD CHECK: Source and target index counts should match");
-            Console.WriteLine(" Source index contains {0} docs", sourceCount);
-            Console.WriteLine(" Target index contains {0} docs\r\n", targetCount);
+            exists = File.Exists(MetadataDirectory + "\\" + "Finished.txt");
+
+
+            if (!exists)
+                File.Create(MetadataDirectory + "\\" + "Finished.txt");        
+
+            List<string> FinishedFacetContent = new List<string>();
+
+            if (File.Exists(MetadataDirectory + "\\" + "Finished.txt"))
+            {
+                using (var lines = File.ReadLines(MetadataDirectory + "\\" + "Finished.txt").GetEnumerator())
+                {
+                    do
+                    {
+                        var line = lines.Current;
+                        if (line != null)
+                            FinishedFacetContent.Insert(0, line);
+                    }
+                    while (lines.MoveNext());
+                }
+            }
+
+            FinishedFacetContent.Reverse();
+
+            // 2. Delete and create the Target index
+            if (RecreateTargetIndex)
+            {
+                GetSourceIndexSchema();
+                DeleteTargetIndex();
+                CreateTargetIndex();
+            }
+
+            // 3. Get the distinct list of facets values from the Source index, skip finished indexes
+            List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
+            Console.WriteLine($"\n Count of {FacetCategory}: {DistinctFacetContent.Count}");
+            Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", DistinctFacetContent.ToList())}");
+
+            DistinctFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
+
+            try
+            {
+
+                // 4. Migrate one facet at a time
+                foreach (var _FacetContent in DistinctFacetContent)
+                {
+                    // 4.1 Backup from source index
+                    Console.WriteLine("\nStarting Index Backup of " + _FacetContent);
+                    BackupIndexAndDocuments(_FacetContent);
+
+                    // 4.2 Restore to target index
+                    ImportDocumentsFromJSON(_FacetContent);
+
+                    // 4.3 Validate the contents is in target index
+                    int sourceCount = GetCurrentDocCount(SourceSearchClient, FacetCategory, _FacetContent);
+                    int targetCount = GetCurrentDocCount(TargetSearchClient, FacetCategory, _FacetContent);
+
+                    Console.WriteLine(" Source index contains {0} docs", sourceCount);
+                    Console.WriteLine(" Target index contains {0} docs", targetCount);
+
+                    if (sourceCount == targetCount)
+                    {
+                        var Completed = new List<string>();
+                        Completed.Insert(0, _FacetContent);
+
+                        File.AppendAllLines(MetadataDirectory + "\\" + "Finished.txt", Completed);
+                    }
+
+                }
+
+            }
+            catch(Exception e)
+            {
+                Console.WriteLine(e);
+                Console.WriteLine("Error in execution");
+            }
+
             Console.WriteLine("Press any key to continue...");
             Console.ReadLine();
         }
@@ -86,9 +151,11 @@ namespace AzureSearchBackupRestore
             TargetAdminKey = configuration["TargetAdminKey"];
             TargetIndexName = configuration["TargetIndexName"];
 
+            RecreateTargetIndex = bool.Parse(configuration["RecreateTargetIndex"]);
+
             FacetCategory = configuration["FacetCategory"];
             BackupDirectory = configuration["BackupDirectory"];
-            StatisticsDirectory = configuration["StatisticsDirectory"];
+            MetadataDirectory = configuration["MetadataDirectory"];
 
             SourceIndexClient = new SearchIndexClient(new Uri("https://" + SourceSearchServiceName + ".search.windows.net"), new AzureKeyCredential(SourceAdminKey));
             SourceSearchClient = SourceIndexClient.GetSearchClient(SourceIndexName);
@@ -96,58 +163,33 @@ namespace AzureSearchBackupRestore
             TargetIndexClient = new SearchIndexClient(new Uri($"https://" + TargetSearchServiceName + ".search.windows.net"), new AzureKeyCredential(TargetAdminKey));
             TargetSearchClient = TargetIndexClient.GetSearchClient(TargetIndexName);
 
-            Console.WriteLine("CONFIGURATION:");
+            Console.WriteLine("Configuration:");
             Console.WriteLine("\n  Source service and index {0}, {1}", SourceSearchServiceName, SourceIndexName);
             Console.WriteLine("\n  Target service and index: {0}, {1}", TargetSearchServiceName, TargetIndexName);
             Console.WriteLine("\n  Backup directory: " + BackupDirectory);
-            Console.WriteLine("\n  Statistics directory: " + StatisticsDirectory);
+            Console.WriteLine("\n  Metadata directory: " + MetadataDirectory);
         }
 
-        static void BackupIndexAndDocuments(string FacetCategory)
+        static void GetSourceIndexSchema()
         {
-            // 1. Backup the index schema to the specified backup directory
+            // Backup the index schema to the specified backup directory
             Console.WriteLine("\n Backing up source index schema to {0}\r\n", BackupDirectory + "\\" + SourceIndexName + ".schema");
             File.WriteAllText(BackupDirectory + "\\" + SourceIndexName + ".schema", GetIndexSchema());
+        }
 
-            // 2. Get the distinct list of facets values
-            List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
-            Console.WriteLine($"\n List of {FacetCategory}: {DistinctFacetContent.Count}");
+        static void BackupIndexAndDocuments(string FacetValue)
+        {
 
-            string IndexFile = StatisticsDirectory + "\\" + FacetCategory +"1.txt";
-            StreamWriter indexfile = File.CreateText(IndexFile);
+            int indexDocCount = GetDocCountForFacetAsync(SourceSearchClient, FacetCategory, FacetValue);
 
-            foreach (var _FacetContent in DistinctFacetContent)
-            {
-                Console.WriteLine(_FacetContent);
-                indexfile.WriteLine(IndexFile, _FacetContent);
-            }
-
-            indexfile.Close();
-
-            string CounterFile = StatisticsDirectory + "\\Counter.txt";
-            StreamWriter counterfile = File.CreateText(CounterFile);
-
-            int id = 0;
-
-            foreach (var _FacetContent in DistinctFacetContent)
-            {
-                Console.WriteLine($"Iteration {id}");
-                Console.WriteLine($"\n  Retrieving documents for {FacetCategory} : {_FacetContent}\r\n");
-
-                int indexDocCount = GetDocCountForFacetAsync(SourceSearchClient, FacetCategory, _FacetContent);
-
-                if (indexDocCount > MaxRecordsSkippablePerRequest)
-                    Console.WriteLine($"Files count: {indexDocCount} for index: {_FacetContent}");
+            if (indexDocCount > MaxRecordsSkippablePerRequest)
+                Console.WriteLine($"ERROR: Files count: {indexDocCount} for index: {FacetValue}");
                 
-                string content = $"{_FacetContent}: {indexDocCount}\n";
-                counterfile.WriteLine(CounterFile, content);
+            string content = $"{FacetValue}: {indexDocCount}\n";
+            Console.WriteLine($"Files count: {indexDocCount} for index: {FacetValue}");
 
-                WriteIndexDocuments(indexDocCount, FacetCategory, _FacetContent);
+            WriteIndexDocuments(indexDocCount, FacetCategory, FacetValue);
 
-                ++id;
-            }
-
-            counterfile.Close();
         }
 
         private static int GetDocCountForFacetAsync(SearchClient searchClient, string facetField, string facetValue)
@@ -176,6 +218,17 @@ namespace AzureSearchBackupRestore
 
         static void WriteIndexDocuments(int CurrentDocCount, string facetField, string facetValue)
         {
+            string backupFolder = BackupDirectory + "\\" + facetValue;
+            bool exists = Directory.Exists(backupFolder);
+
+            if (!exists)
+                Directory.CreateDirectory(backupFolder);
+            else
+                foreach(var file in Directory.EnumerateFiles(backupFolder))
+                {
+                    File.Delete(file);
+                }
+
             // Write document files in batches (per MaxBatchSize) in parallel
             string IDFieldName = GetIDFieldName();
             int FileCounter = 0;
@@ -189,10 +242,10 @@ namespace AzureSearchBackupRestore
                     int fileCounter = FileCounter;
                     if ((fileCounter - 1) * MaxBatchSize < CurrentDocCount)
                     {
-                        Console.WriteLine("  Backing up source documents to {0} - (batch size = {1})", BackupDirectory + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json", MaxBatchSize);
+                        Console.WriteLine("  Backing up source documents to {0} - (batch max. size = {1})", backupFolder + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json", MaxBatchSize);
 
                         tasks.Add(Task.Factory.StartNew(() =>
-                            ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, BackupDirectory + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json")
+                            ExportToJSON((fileCounter - 1) * MaxBatchSize, facetField, facetValue, backupFolder + "\\" + SourceIndexName + "-" + facetValue + fileCounter + ".json")
                         ));
                     }
 
@@ -214,7 +267,8 @@ namespace AzureSearchBackupRestore
                 {
                     SearchMode = SearchMode.All,
                     Size = MaxBatchSize,
-                    Filter = filterQuery
+                    Filter = filterQuery,
+                    Skip = skip
                 };
 
                 SearchResults<SearchDocument> response = SourceSearchClient.Search<SearchDocument>("*", options);
@@ -314,7 +368,7 @@ namespace AzureSearchBackupRestore
             return Schema;
         }
 
-        private static bool DeleteIndex()
+        private static bool DeleteTargetIndex()
         {
             Console.WriteLine("\n  Delete target index {0} in {1} search service, if it exists", TargetIndexName, TargetSearchServiceName);
             // Delete the index if it exists
@@ -362,14 +416,18 @@ namespace AzureSearchBackupRestore
             }
         }
 
-        static int GetCurrentDocCount(SearchClient searchClient)
+        static int GetCurrentDocCount(SearchClient searchClient, string facetField, string facetValue)
         {
             // Get the current doc count of the specified index
             try
             {
+
+                string filterQuery = $"{facetField} eq '{facetValue}'";
+
                 SearchOptions options = new SearchOptions()
                 {
                     SearchMode = SearchMode.All,
+                    Filter = filterQuery,
                     IncludeTotalCount = true
                 };
 
@@ -384,7 +442,7 @@ namespace AzureSearchBackupRestore
             return -1;
         }
 
-        static void ImportFromJSON()
+        static void ImportDocumentsFromJSON(string FacetValue)
         {
             Console.WriteLine("\n  Upload index documents from saved JSON files");
             // Take JSON file and import this as-is to target index
@@ -396,7 +454,7 @@ namespace AzureSearchBackupRestore
             {
                 int _counter = 0;
 
-                foreach (string fileName in Directory.GetFiles(BackupDirectory, SourceIndexName + "*.json"))
+                foreach (string fileName in Directory.GetFiles(BackupDirectory + "\\" + FacetValue, SourceIndexName + "*.json"))
                 {
                     Console.WriteLine("  -Uploading documents from file {0}", fileName);
                     string json = File.ReadAllText(fileName);
