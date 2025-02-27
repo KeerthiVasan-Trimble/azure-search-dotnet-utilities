@@ -259,7 +259,8 @@ namespace AzureSearchBackupRestore
                 {
                     SearchMode = SearchMode.All,
                     Size = MaxBatchSize,
-                    Filter = filterQuery
+                    Filter = filterQuery,
+                    Skip = skip
                 };
 
                 SearchResults<SearchDocument> response = SourceSearchClient.Search<SearchDocument>("*", options);
