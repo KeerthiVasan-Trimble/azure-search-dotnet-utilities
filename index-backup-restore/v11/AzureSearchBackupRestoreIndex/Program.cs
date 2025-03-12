@@ -270,6 +270,12 @@ namespace AzureSearchBackupRestore
                     Filter = filterQuery,
                     Skip = skip
                 };
+                options.Select.Add("id");
+                options.Select.Add("content");
+                options.Select.Add("embedding");
+                options.Select.Add("category");
+                options.Select.Add("source_url");
+                options.Select.Add("file_id");
 
                 SearchResults<SearchDocument> response = SourceSearchClient.Search<SearchDocument>("*", options);
 
