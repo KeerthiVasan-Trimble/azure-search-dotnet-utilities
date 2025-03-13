@@ -46,40 +46,30 @@ namespace AzureSearchBackupRestore
             // 1. Get source, target index details and other configurations from appsettings.json file
             ConfigurationSetup();
 
-            bool exists = Directory.Exists(BackupDirectory);
-
-            if (!exists)
+            if (!Directory.Exists(BackupDirectory))
+            {
                 Directory.CreateDirectory(BackupDirectory);
+            }
 
-
-            exists = Directory.Exists(MetadataDirectory);
-
-            if (!exists)
+            if (!Directory.Exists(MetadataDirectory))
+            {
                 Directory.CreateDirectory(MetadataDirectory);
+            }
 
-            exists = File.Exists(MetadataDirectory + "\\" + "Finished.txt");
+            string finishedFilePath = Path.Combine(MetadataDirectory, "Finished.txt");
 
-
-            if (!exists)
-                File.Create(MetadataDirectory + "\\" + "Finished.txt");        
+            if (!File.Exists(finishedFilePath))
+            {
+                using (File.Create(finishedFilePath)) { }
+            }
 
             List<string> FinishedFacetContent = new List<string>();
 
-            if (File.Exists(MetadataDirectory + "\\" + "Finished.txt"))
+            if (File.Exists(finishedFilePath))
             {
-                using (var lines = File.ReadLines(MetadataDirectory + "\\" + "Finished.txt").GetEnumerator())
-                {
-                    do
-                    {
-                        var line = lines.Current;
-                        if (line != null)
-                            FinishedFacetContent.Insert(0, line);
-                    }
-                    while (lines.MoveNext());
-                }
+                FinishedFacetContent = File.ReadAllLines(finishedFilePath).ToList();
+                FinishedFacetContent.Reverse();
             }
-
-            FinishedFacetContent.Reverse();
 
             // 2. Delete and create the Target index
             if (RecreateTargetIndex)
