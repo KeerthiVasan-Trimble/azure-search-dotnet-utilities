@@ -371,9 +371,56 @@ namespace AzureSearchBackupRestore
                 Console.WriteLine("Error: {0}", ex.Message.ToString());
             }
 
-            return Schema;
+            string updatedSchema = ModifyIndexFields(Schema);
+
+            return updatedSchema;
         }
 
+        static string ModifyIndexFields(string schema)
+        {
+            // Path to the JSON file containing the new fields
+            string newIndexFieldsFile = "./newindexfields.json";
+
+            // Read the JSON file containing the new fields
+            string newIndexFields = File.ReadAllText(newIndexFieldsFile);
+
+            // Parse the JSON strings
+            using (JsonDocument fieldsDocument = JsonDocument.Parse(newIndexFields))
+            using (JsonDocument schemaDocument = JsonDocument.Parse(schema))
+            {
+                JsonElement fieldsRoot = fieldsDocument.RootElement;
+                JsonElement schemaRoot = schemaDocument.RootElement;
+
+                // Create a new JSON object with the updated fields
+                using (var stream = new MemoryStream())
+                {
+                    using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+                    {
+                        writer.WriteStartObject();
+
+                        foreach (JsonProperty property in schemaRoot.EnumerateObject())
+                        {
+                            if (property.Name == "fields")
+                            {
+                                // Replace the fields property with the new fields
+                                writer.WritePropertyName("fields");
+                                fieldsRoot.GetProperty("fields").WriteTo(writer);
+                            }
+                            else
+                            {
+                                property.WriteTo(writer);
+                            }
+                        }
+
+                        writer.WriteEndObject();
+                    }
+
+                    string updatedSchema = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+                    return updatedSchema;
+                }
+            }
+        }
+           
         private static bool DeleteTargetIndex()
         {
             Console.WriteLine("\n  Delete target index {0} in {1} search service, if it exists", TargetIndexName, TargetSearchServiceName);
