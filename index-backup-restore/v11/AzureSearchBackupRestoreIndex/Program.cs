@@ -36,7 +36,7 @@ namespace AzureSearchBackupRestore
         private static SearchIndexClient TargetIndexClient;
         private static SearchClient TargetSearchClient;
 
-        private static int MaxBatchSize = 500;                        // JSON files will contain this many documents / file and can be up to 1000
+        private static int MaxBatchSize = 1000;                        // JSON files will contain this many documents / file and can be up to 1000
         private static int ParallelizedJobs = 10;                     // Output content in parallel jobs
         private static int MaxRecordsSkippablePerRequest = 100000;    // Fixed by Azure. Do not change
 
@@ -98,6 +98,10 @@ namespace AzureSearchBackupRestore
 
                     // 4.2 Restore to target index
                     ImportDocumentsFromJSON(_FacetContent);
+
+                    // Waiting 10 seconds for target to index content...
+                    // NOTE: For really large indexes it may take longer to index all content
+                    Thread.Sleep(10 * 1000);
 
                     // 4.3 Validate the contents is in target index
                     int sourceCount = GetCurrentDocCount(SourceSearchClient, FacetCategory, _FacetContent);
@@ -493,25 +497,17 @@ namespace AzureSearchBackupRestore
 
             try
             {
-                int _counter = 0;
-
                 foreach (string fileName in Directory.GetFiles(BackupDirectory + "\\" + FacetValue, SourceIndexName + "*.json"))
                 {
                     Console.WriteLine("  -Uploading documents from file {0}", fileName);
                     string json = File.ReadAllText(fileName);
                     Uri uri = new Uri(ServiceUri, "/indexes/" + TargetIndexName + "/docs/index");
                     HttpResponseMessage response = AzureSearchHelper.SendSearchRequest(HttpClient, HttpMethod.Post, uri, json);
-                    response.EnsureSuccessStatusCode();
-                    
-                    Thread.Sleep(10 * 1000);
-
-                    if (_counter == 100)
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                     {
-                        Thread.Sleep(300 * 1000);
-                        _counter = 0;
+                        Thread.Sleep(30 * 1000);
                     }
-
-                    _counter++;
+                    response.EnsureSuccessStatusCode();
                 }
             }
             catch (Exception ex)
