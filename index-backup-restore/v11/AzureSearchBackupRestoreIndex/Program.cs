@@ -46,40 +46,30 @@ namespace AzureSearchBackupRestore
             // 1. Get source, target index details and other configurations from appsettings.json file
             ConfigurationSetup();
 
-            bool exists = Directory.Exists(BackupDirectory);
-
-            if (!exists)
+            if (!Directory.Exists(BackupDirectory))
+            {
                 Directory.CreateDirectory(BackupDirectory);
+            }
 
-
-            exists = Directory.Exists(MetadataDirectory);
-
-            if (!exists)
+            if (!Directory.Exists(MetadataDirectory))
+            {
                 Directory.CreateDirectory(MetadataDirectory);
+            }
 
-            exists = File.Exists(MetadataDirectory + "\\" + "Finished.txt");
+            string finishedFilePath = Path.Combine(MetadataDirectory, "Finished.txt");
 
-
-            if (!exists)
-                File.Create(MetadataDirectory + "\\" + "Finished.txt");        
+            if (!File.Exists(finishedFilePath))
+            {
+                using (File.Create(finishedFilePath)) { }
+            }
 
             List<string> FinishedFacetContent = new List<string>();
 
-            if (File.Exists(MetadataDirectory + "\\" + "Finished.txt"))
+            if (File.Exists(finishedFilePath))
             {
-                using (var lines = File.ReadLines(MetadataDirectory + "\\" + "Finished.txt").GetEnumerator())
-                {
-                    do
-                    {
-                        var line = lines.Current;
-                        if (line != null)
-                            FinishedFacetContent.Insert(0, line);
-                    }
-                    while (lines.MoveNext());
-                }
+                FinishedFacetContent = File.ReadAllLines(finishedFilePath).ToList();
+                FinishedFacetContent.Reverse();
             }
-
-            FinishedFacetContent.Reverse();
 
             // 2. Delete and create the Target index
             if (RecreateTargetIndex)
@@ -270,6 +260,12 @@ namespace AzureSearchBackupRestore
                     Filter = filterQuery,
                     Skip = skip
                 };
+                options.Select.Add("id");
+                options.Select.Add("content");
+                options.Select.Add("embedding");
+                options.Select.Add("category");
+                options.Select.Add("source_url");
+                options.Select.Add("file_id");
 
                 SearchResults<SearchDocument> response = SourceSearchClient.Search<SearchDocument>("*", options);
 
@@ -302,7 +298,7 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = {$"{facetField}"},
+                Facets = {$"{facetField}, count:5000"},
                 Select = {facetField}
             };
 
@@ -312,8 +308,6 @@ namespace AzureSearchBackupRestore
                 facetValues.Add(facetResult.Value.ToString());
 
             facetValues = facetValues.Distinct().ToList<string>();
-            facetValues.Sort();
-
             return facetValues;
         }
 
@@ -365,9 +359,56 @@ namespace AzureSearchBackupRestore
                 Console.WriteLine("Error: {0}", ex.Message.ToString());
             }
 
-            return Schema;
+            string updatedSchema = ModifyIndexFields(Schema);
+
+            return updatedSchema;
         }
 
+        static string ModifyIndexFields(string schema)
+        {
+            // Path to the JSON file containing the new fields
+            string newIndexFieldsFile = "./newindexfields.json";
+
+            // Read the JSON file containing the new fields
+            string newIndexFields = File.ReadAllText(newIndexFieldsFile);
+
+            // Parse the JSON strings
+            using (JsonDocument fieldsDocument = JsonDocument.Parse(newIndexFields))
+            using (JsonDocument schemaDocument = JsonDocument.Parse(schema))
+            {
+                JsonElement fieldsRoot = fieldsDocument.RootElement;
+                JsonElement schemaRoot = schemaDocument.RootElement;
+
+                // Create a new JSON object with the updated fields
+                using (var stream = new MemoryStream())
+                {
+                    using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+                    {
+                        writer.WriteStartObject();
+
+                        foreach (JsonProperty property in schemaRoot.EnumerateObject())
+                        {
+                            if (property.Name == "fields")
+                            {
+                                // Replace the fields property with the new fields
+                                writer.WritePropertyName("fields");
+                                fieldsRoot.GetProperty("fields").WriteTo(writer);
+                            }
+                            else
+                            {
+                                property.WriteTo(writer);
+                            }
+                        }
+
+                        writer.WriteEndObject();
+                    }
+
+                    string updatedSchema = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+                    return updatedSchema;
+                }
+            }
+        }
+           
         private static bool DeleteTargetIndex()
         {
             Console.WriteLine("\n  Delete target index {0} in {1} search service, if it exists", TargetIndexName, TargetSearchServiceName);
