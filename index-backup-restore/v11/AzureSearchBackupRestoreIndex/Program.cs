@@ -57,10 +57,16 @@ namespace AzureSearchBackupRestore
             }
 
             string finishedFilePath = Path.Combine(MetadataDirectory, "Finished.txt");
+            string totalTimeFilePath = Path.Combine(MetadataDirectory, "ProcessTime.txt");
 
             if (!File.Exists(finishedFilePath))
             {
                 using (File.Create(finishedFilePath)) { }
+            }
+
+            if (!File.Exists(totalTimeFilePath))
+            {
+                using (File.Create(totalTimeFilePath)) { }
             }
 
             List<string> FinishedFacetContent = new List<string>();
@@ -85,6 +91,8 @@ namespace AzureSearchBackupRestore
             Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", DistinctFacetContent.ToList())}");
 
             DistinctFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
+
+            DateTime startTime = DateTime.Now;
 
             try
             {
@@ -126,6 +134,21 @@ namespace AzureSearchBackupRestore
                 Console.WriteLine(e);
                 Console.WriteLine("Error in execution");
             }
+
+            DateTime endTime = DateTime.Now;
+
+            List<string> processTimeInfo = new List<string>
+            {
+                $"Source Index Service: {SourceSearchServiceName}",
+                $"Source Index Name: {SourceIndexName}",
+                $"Target Index Service: {TargetSearchServiceName}",
+                $"Target Index Name: {TargetIndexName}",
+                $"Process Start Time: {startTime}",
+                $"Process End Time: {endTime}",
+                $"Total Process Time: {endTime - startTime}"
+            };
+
+            File.AppendAllLines(totalTimeFilePath, processTimeInfo);
 
             Console.WriteLine("Press any key to continue...");
             Console.ReadLine();
