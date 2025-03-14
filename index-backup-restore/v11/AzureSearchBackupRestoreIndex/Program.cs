@@ -36,7 +36,7 @@ namespace AzureSearchBackupRestore
         private static SearchIndexClient TargetIndexClient;
         private static SearchClient TargetSearchClient;
 
-        private static int MaxBatchSize = 1000;                        // JSON files will contain this many documents / file and can be up to 1000
+        private static int MaxBatchSize = 500;                        // JSON files will contain this many documents / file and can be up to 1000
         private static int ParallelizedJobs = 10;                     // Output content in parallel jobs
         private static int MaxRecordsSkippablePerRequest = 100000;    // Fixed by Azure. Do not change
 
