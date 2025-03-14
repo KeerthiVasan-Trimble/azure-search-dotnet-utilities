@@ -308,8 +308,6 @@ namespace AzureSearchBackupRestore
                 facetValues.Add(facetResult.Value.ToString());
 
             facetValues = facetValues.Distinct().ToList<string>();
-            facetValues.Sort();
-
             return facetValues;
         }
 
