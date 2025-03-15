@@ -56,6 +56,7 @@ namespace AzureSearchBackupRestore
                 Directory.CreateDirectory(MetadataDirectory);
             }
 
+            string sourceIndexListFilePath = Path.Combine(MetadataDirectory, "SourceIndexList.txt");
             string finishedFilePath = Path.Combine(MetadataDirectory, "Finished.txt");
             string totalTimeFilePath = Path.Combine(MetadataDirectory, "ProcessTime.txt");
 
@@ -67,6 +68,11 @@ namespace AzureSearchBackupRestore
             if (!File.Exists(totalTimeFilePath))
             {
                 using (File.Create(totalTimeFilePath)) { }
+            }
+
+            if (!File.Exists(sourceIndexListFilePath))
+            {
+                using (File.Create(sourceIndexListFilePath)) { }
             }
 
             List<string> FinishedFacetContent = new List<string>();
@@ -89,16 +95,16 @@ namespace AzureSearchBackupRestore
             List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
             Console.WriteLine($"\n Count of {FacetCategory}: {DistinctFacetContent.Count}");
             Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", DistinctFacetContent.ToList())}");
+            File.WriteAllLines(sourceIndexListFilePath, DistinctFacetContent.ToList());
 
-            DistinctFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
-
+            List<string> UnfinishedFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
             DateTime startTime = DateTime.Now;
 
             try
             {
 
                 // 4. Migrate one facet at a time
-                foreach (var _FacetContent in DistinctFacetContent)
+                foreach (var _FacetContent in UnfinishedFacetContent)
                 {
                     // 4.1 Backup from source index
                     Console.WriteLine("\nStarting Index Backup of " + _FacetContent);
@@ -107,13 +113,29 @@ namespace AzureSearchBackupRestore
                     // 4.2 Restore to target index
                     ImportDocumentsFromJSON(_FacetContent);
 
-                    // Waiting 10 seconds for target to index content...
-                    // NOTE: For really large indexes it may take longer to index all content
-                    Thread.Sleep(10 * 1000);
-
                     // 4.3 Validate the contents is in target index
                     int sourceCount = GetCurrentDocCount(SourceSearchClient, FacetCategory, _FacetContent);
-                    int targetCount = GetCurrentDocCount(TargetSearchClient, FacetCategory, _FacetContent);
+                    int targetCount = 0;
+                    int maxRetries = 10; // Max attempts before giving up
+                    int retryCount = 0;
+                    int baseWaitTime = 10; // Start at 10ms for very fast indexing
+                    int maxWaitTime = 10 * 1000; // Cap at 10 seconds
+
+                    while (retryCount < maxRetries)
+                    {
+                        targetCount = GetCurrentDocCount(TargetSearchClient, FacetCategory, _FacetContent);
+
+                        if (targetCount >= sourceCount)
+                        {
+                            break;
+                        }
+
+                        // Exponential backoff: 10ms → 20ms → 40ms → ... → max 10s
+                        int waitTime = Math.Min(baseWaitTime * (int)Math.Pow(2, retryCount), maxWaitTime);
+
+                        Thread.Sleep(waitTime);
+                        retryCount++;
+                    }
 
                     Console.WriteLine(" Source index contains {0} docs", sourceCount);
                     Console.WriteLine(" Target index contains {0} docs", targetCount);
@@ -129,7 +151,7 @@ namespace AzureSearchBackupRestore
                 }
 
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 Console.WriteLine(e);
                 Console.WriteLine("Error in execution");
@@ -137,12 +159,16 @@ namespace AzureSearchBackupRestore
 
             DateTime endTime = DateTime.Now;
 
+            List<string> targetFacetValues = GetTargetFacetValues(FacetCategory);
+
             List<string> processTimeInfo = new List<string>
             {
                 $"Source Index Service: {SourceSearchServiceName}",
                 $"Source Index Name: {SourceIndexName}",
+                $"Source Index Count: {DistinctFacetContent.Count}",
                 $"Target Index Service: {TargetSearchServiceName}",
                 $"Target Index Name: {TargetIndexName}",
+                $"Target Index Count: {targetFacetValues.Count}",
                 $"Process Start Time: {startTime}",
                 $"Process End Time: {endTime}",
                 $"Total Process Time: {endTime - startTime}"
@@ -201,7 +227,7 @@ namespace AzureSearchBackupRestore
 
             if (indexDocCount > MaxRecordsSkippablePerRequest)
                 Console.WriteLine($"ERROR: Files count: {indexDocCount} for index: {FacetValue}");
-                
+
             string content = $"{FacetValue}: {indexDocCount}\n";
             Console.WriteLine($"Files count: {indexDocCount} for index: {FacetValue}");
 
@@ -241,7 +267,7 @@ namespace AzureSearchBackupRestore
             if (!exists)
                 Directory.CreateDirectory(backupFolder);
             else
-                foreach(var file in Directory.EnumerateFiles(backupFolder))
+                foreach (var file in Directory.EnumerateFiles(backupFolder))
                 {
                     File.Delete(file);
                 }
@@ -325,11 +351,30 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = {$"{facetField}, count:5000"},
-                Select = {facetField}
+                Facets = { $"{facetField}, count:5000" },
+                Select = { facetField }
             };
 
             SearchResults<Dictionary<string, object>> results = SourceSearchClient.Search<Dictionary<string, object>>("*", options);
+
+            foreach (FacetResult facetResult in results.Facets[facetField])
+                facetValues.Add(facetResult.Value.ToString());
+
+            facetValues = facetValues.Distinct().ToList<string>();
+            return facetValues;
+        }
+
+        private static List<string> GetTargetFacetValues(string facetField)
+        {
+            List<string> facetValues = new List<string>();
+            SearchOptions options = new SearchOptions
+            {
+                SearchMode = SearchMode.All,
+                Facets = { $"{facetField}, count:5000" },
+                Select = { facetField }
+            };
+
+            SearchResults<Dictionary<string, object>> results = TargetSearchClient.Search<Dictionary<string, object>>("*", options);
 
             foreach (FacetResult facetResult in results.Facets[facetField])
                 facetValues.Add(facetResult.Value.ToString());
@@ -435,7 +480,7 @@ namespace AzureSearchBackupRestore
                 }
             }
         }
-           
+
         private static bool DeleteTargetIndex()
         {
             Console.WriteLine("\n  Delete target index {0} in {1} search service, if it exists", TargetIndexName, TargetSearchServiceName);
