@@ -27,6 +27,7 @@ namespace AzureSearchBackupRestore
         private static string TargetAdminKey;
         private static string TargetIndexName;
         private static bool RecreateTargetIndex;
+        private static bool ReadSourceIndexFromFile;
         private static string BackupDirectory;
         private static string MetadataDirectory;
         private static string FacetCategory;
@@ -91,13 +92,21 @@ namespace AzureSearchBackupRestore
                 CreateTargetIndex();
             }
 
-            // 3. Get the distinct list of facets values from the Source index, skip finished indexes
-            List<string> DistinctFacetContent = GetFacetValues(FacetCategory);
-            Console.WriteLine($"\n Count of {FacetCategory}: {DistinctFacetContent.Count}");
-            Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", DistinctFacetContent.ToList())}");
-            File.WriteAllLines(sourceIndexListFilePath, DistinctFacetContent.ToList());
+            List<string> SourceFacetContent = new List<string>();
+            if (ReadSourceIndexFromFile && File.Exists(sourceIndexListFilePath))
+            {
+                SourceFacetContent = File.ReadAllLines(sourceIndexListFilePath).ToList();
+            }
+            else
+            {
+                SourceFacetContent = GetFacetValues(FacetCategory);
+            }
 
-            List<string> UnfinishedFacetContent = DistinctFacetContent.Except(FinishedFacetContent).ToList();
+            Console.WriteLine($"\n Count of {FacetCategory}: {SourceFacetContent.Count}");
+            Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", SourceFacetContent.ToList())}");
+            File.WriteAllLines(sourceIndexListFilePath, SourceFacetContent.ToList());
+
+            List<string> UnfinishedFacetContent = SourceFacetContent.Except(FinishedFacetContent).ToList();
             DateTime startTime = DateTime.Now;
 
             try
@@ -165,7 +174,7 @@ namespace AzureSearchBackupRestore
             {
                 $"Source Index Service: {SourceSearchServiceName}",
                 $"Source Index Name: {SourceIndexName}",
-                $"Source Index Count: {DistinctFacetContent.Count}",
+                $"Source Index Count: {SourceFacetContent.Count}",
                 $"Target Index Service: {TargetSearchServiceName}",
                 $"Target Index Name: {TargetIndexName}",
                 $"Target Index Count: {targetFacetValues.Count}",
@@ -195,6 +204,7 @@ namespace AzureSearchBackupRestore
             TargetIndexName = configuration["TargetIndexName"];
 
             RecreateTargetIndex = bool.Parse(configuration["RecreateTargetIndex"]);
+            ReadSourceIndexFromFile = bool.Parse(configuration["ReadSourceIndexFromFile"]);
 
             FacetCategory = configuration["FacetCategory"];
             BackupDirectory = configuration["BackupDirectory"];
