@@ -361,7 +361,7 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = { $"{facetField}, count:5000" },
+                Facets = { $"{facetField}, count:15000" },
                 Select = { facetField }
             };
 
@@ -380,7 +380,7 @@ namespace AzureSearchBackupRestore
             SearchOptions options = new SearchOptions
             {
                 SearchMode = SearchMode.All,
-                Facets = { $"{facetField}, count:5000" },
+                Facets = { $"{facetField}, count:15000" },
                 Select = { facetField }
             };
 
