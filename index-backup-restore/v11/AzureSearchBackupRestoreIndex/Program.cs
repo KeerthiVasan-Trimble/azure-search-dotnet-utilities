@@ -41,8 +41,14 @@ namespace AzureSearchBackupRestore
         private static int ParallelizedJobs = 10;                     // Output content in parallel jobs
         private static int MaxRecordsSkippablePerRequest = 100000;    // Fixed by Azure. Do not change
 
+        private static List<string> UnfinishedFacetContent;
+        private static List<string> FinishedFacetContent;
+        private static DateTime startTime;
+
         static void Main(string[] args)
         {
+            // Register the event handler for process exit
+            AppDomain.CurrentDomain.ProcessExit += new EventHandler(OnProcessExit);
 
             // 1. Get source, target index details and other configurations from appsettings.json file
             ConfigurationSetup();
@@ -76,7 +82,7 @@ namespace AzureSearchBackupRestore
                 using (File.Create(sourceIndexListFilePath)) { }
             }
 
-            List<string> FinishedFacetContent = new List<string>();
+            FinishedFacetContent = new List<string>();
 
             if (File.Exists(finishedFilePath))
             {
@@ -106,8 +112,8 @@ namespace AzureSearchBackupRestore
             Console.WriteLine($"\n List of {FacetCategory}:\n {string.Join("\n ", SourceFacetContent.ToList())}");
             File.WriteAllLines(sourceIndexListFilePath, SourceFacetContent.ToList());
 
-            List<string> UnfinishedFacetContent = SourceFacetContent.Except(FinishedFacetContent).ToList();
-            DateTime startTime = DateTime.Now;
+            UnfinishedFacetContent = SourceFacetContent.Except(FinishedFacetContent).ToList();
+            startTime = DateTime.Now;
 
             try
             {
@@ -188,6 +194,29 @@ namespace AzureSearchBackupRestore
             Console.WriteLine("Press any key to continue...");
             Console.ReadLine();
         }
+
+        // Event handler for process exit
+        static void OnProcessExit(object sender, EventArgs e)
+        {
+            string logFilePath = Path.Combine(MetadataDirectory, "ProcessExitLog.txt");
+
+            List<string> exitLogInfo = new List<string>
+            {
+                $"Process Start Time: {startTime}",
+                $"Process Exit Time: {DateTime.Now}",
+                $"Source Index Service: {SourceSearchServiceName}",
+                $"Source Index Name: {SourceIndexName}",
+                $"Target Index Service: {TargetSearchServiceName}",
+                $"Target Index Name: {TargetIndexName}",
+                $"Unfinished Facet Count: {UnfinishedFacetContent.Count}",
+                $"Finished Facet Count: {FinishedFacetContent.Count}"
+            };
+
+            File.AppendAllLines(logFilePath, exitLogInfo);
+
+            Console.WriteLine("Process exit logged successfully.");
+        }
+
 
         static void ConfigurationSetup()
         {
